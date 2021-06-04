@@ -659,9 +659,11 @@ class FrotzEnv():
 
         """
         import hashlib
-        world_objs_str = ', '.join([str(o) for o in self.get_world_objects(clean=True)])
-        special_ram_addrs = self._get_special_ram()
-        world_state_str = world_objs_str + str(special_ram_addrs)
+        l = [self.get_player_location()]
+        l.extend(utl.get_subtree(l[0].child, self.get_world_objects()))
+        world_objs_str = ', '.join([str(o) for o in l])
+        # special_ram_addrs = self._get_special_ram()
+        world_state_str = world_objs_str # + str(special_ram_addrs)
         m = hashlib.md5()
         m.update(world_state_str.encode('utf-8'))
         return m.hexdigest()
