@@ -19,7 +19,7 @@ import re
 from .game_info import *
 
 #: List of illegal actions that manipulate game state.
-ILLEGAL_ACTIONS = 'license/licence/lisense/lisence/copyright/terms/eula/info/tutorial/changes/daemons/messages/actions/normal/win/lose/quotes/replay/recording/hint/menu/walkthru/walkthrou/manual/purloin/trace/about/clue/nouns/places/objects/long/short/notify/short/long/die/noscript/full/fullscore/credit/credits/help/super/save/versio/verbos/brief/restar/restor/again/$ve/verify/version/verbose/transcrip/tw-print/showme/showverb/showheap/superbrie/script/restore/restart/quit/q/random/responses/max_scor/fullscore/score/endofobje/comma,/./,/unscri/gonear'.split('/')
+ILLEGAL_ACTIONS = 'license/licence/lisense/lisence/copyright/terms/eula/info/tutorial/changes/daemons/messages/actions/normal/win/lose/quotes/replay/recording/hint/menu/walkthru/walkthrou/manual/purloin/abstract/trace/about/clue/nouns/places/objects/long/short/notify/short/long/die/noscript/full/fullscore/credit/credits/help/super/save/versio/verbos/brief/restar/restor/again/$ve/verify/version/verbose/transcrip/tw-print/showme/showverb/showheap/superbrie/script/restore/restart/quit/q/random/responses/max_scor/fullscore/score/endofobje/comma,/./,/unscri/gonear'.split('/')
 
 #: List of basic actions applicable to almost any game.
 BASIC_ACTIONS = 'north/south/west/east/northwest/southwest/northeast/southeast/up/down/enter/exit/take all'.split('/')
@@ -28,23 +28,23 @@ BASIC_ACTIONS = 'north/south/west/east/northwest/southwest/northeast/southeast/u
 NO_EFFECT_ACTIONS = 'examine/x/look/l/i/inventory/gaze'.split('/')
 
 unrecognized = [
-    ".*That's not a verb I recognise.*",
-    ".*I don't know the word \"(\w+)\.?\".*",
-    ".*You used the word \"(\w+)\" in a way that I don't understand.*",
-    ".*You can't see any \"?(.*)\"? here!*",
-    ".*This story doesn't know the word \"(\w+)\.?\".*",
-    ".*This story doesn't recognize the word \"(\w+)\.?\".*",
-    ".*The word \"(\w+)\" isn't in the vocabulary that you can use.*",
-    ".*You don't need to use the word \"(\w+)\" to finish this story.*",
-    ".*You don't need to use the word \"(\w+)\" to complete this story.*",
-    ".*Sorry, but the word \"(\w+)\" is not in the vocabulary you can use.*",
-    ".*Sorry, but this story doesn't recognize the word \"(\w+)\.?\".*",
-    ".*It's not clear what you're referring to..*",
-    ".*There seems to be a noun missing in that sentence!.*",
-    ".*That sentence isn't one I recognize.*",
-    ".*What do you want to examine?.*",
-    ".*You can't see any such thing.*",
-    ".*That's not something you need to refer to in the course of this game.*"
+    r".*That's not a verb I recognise.*",
+    r".*I don't know the word \"(\w+)\.?\".*",
+    r".*You used the word \"(\w+)\" in a way that I don't understand.*",
+    r".*You can't see any \"?(.*)\"? here!*",
+    r".*This story doesn't know the word \"(\w+)\.?\".*",
+    r".*This story doesn't recognize the word \"(\w+)\.?\".*",
+    r".*The word \"(\w+)\" isn't in the vocabulary that you can use.*",
+    r".*You don't need to use the word \"(\w+)\" to finish this story.*",
+    r".*You don't need to use the word \"(\w+)\" to complete this story.*",
+    r".*Sorry, but the word \"(\w+)\" is not in the vocabulary you can use.*",
+    r".*Sorry, but this story doesn't recognize the word \"(\w+)\.?\".*",
+    r".*It's not clear what you're referring to..*",
+    r".*There seems to be a noun missing in that sentence!.*",
+    r".*That sentence isn't one I recognize.*",
+    r".*What do you want to examine?.*",
+    r".*You can't see any such thing.*",
+    r".*That's not something you need to refer to in the course of this game.*"
 ]
 
 #: List of regular expressions meant to capture game responses that indicate the

@@ -18,14 +18,21 @@ import os
 import shutil
 import tempfile
 import warnings
-import numpy as np
 import hashlib
+
+from pkg_resources import Requirement, resource_filename
+from collections import defaultdict
+import multiprocessing as mp
+
+import numpy as np
+from ctypes import *
+from numpy.ctypeslib import as_ctypes
+
 from . import defines
 from . import util as utl
 from .template_action_generator import TemplateActionGenerator
-from ctypes import *
-from numpy.ctypeslib import as_ctypes
-from pkg_resources import Requirement, resource_filename
+from jericho.util import chunk
+
 
 JERICHO_PATH = resource_filename(Requirement.parse('jericho'), 'jericho')
 FROTZ_LIB_PATH = os.path.join(JERICHO_PATH, 'libfrotz.so')
@@ -33,6 +40,18 @@ FROTZ_LIB_PATH = os.path.join(JERICHO_PATH, 'libfrotz.so')
 # Function to unload a shared library.
 dlclose_func = CDLL(None).dlclose  # This WON'T work on Win
 dlclose_func.argtypes = [c_void_p]
+
+
+def init_worker(story, seed):
+    """ Worker that will be used to test candidate actions. """
+    worker.env = FrotzEnv(story, seed)
+
+
+def worker(data):
+    """ Worker that will be used to test candidate actions. """
+    state, candidate_actions, use_ctypes = data
+    worker.env.set_state(state)
+    return worker.env._filter_candidate_actions(candidate_actions, use_ctypes=use_ctypes, use_parallel=False)
 
 
 class ZObject(Structure):
@@ -240,6 +259,9 @@ def _load_frotz_lib():
     frotz_lib.halted.argtypes = []
     frotz_lib.halted.restype = int
 
+    frotz_lib.filter_candidate_actions.argtypes = [c_char_p, c_char_p, c_void_p]
+    frotz_lib.filter_candidate_actions.restype = int
+
     frotz_lib.getRAMSize.argtypes = []
     frotz_lib.getRAMSize.restype = int
     frotz_lib.getRAM.argtypes = [c_void_p]
@@ -296,6 +318,12 @@ def _load_frotz_lib():
     frotz_lib.setStack.restype = None
     frotz_lib.getStackSize.argtypes = []
     frotz_lib.getStackSize.restype = int
+
+    frotz_lib.get_opcode.argtypes = []
+    frotz_lib.get_opcode.restype = int
+    frotz_lib.set_opcode.argtypes = [c_int]
+    frotz_lib.set_opcode.restype = None
+
     frotz_lib.disassemble.argtypes = [c_char_p]
     frotz_lib.disassemble.restype = None
     frotz_lib.is_supported.argtypes = [c_char_p]
@@ -311,8 +339,8 @@ def _load_frotz_lib():
 
 def _load_bindings(md5hash):
     """
-    Loads information pertaining to the current game. Returns a dictionary
-    with the following keys:
+    Loads information pertaining to the game corresponding to the provided md5 hash.
+    Returns a dictionary with the following keys:
 
     - `name`: Name of the game. E.g. `zork1`
     - `rom`: Name of the file used to load the game. E.g. `zork1.z5`
@@ -321,27 +349,11 @@ def _load_bindings(md5hash):
     - `grammar`: List of action templates for the game.
     - `max_word_length`: Maximum number of characters per word recognized by the parser.
 
-    :param rom: Path or name of rom to load.
-    :type rom: string
+    :param md5hash: A game's md5 hash.
+    :type md5hash: string
 
     :returns: Dictionary containing game-specific bindings if it exists.
               Otherwise, an empty dictionary.
-
-    :Example:
-
-    >>> import jericho
-    >>> bindings = jericho._load_bindings('zork1')
-    {
-      'name': 'zork1',
-      'rom': 'zork1.z5',
-      'seed': 12,
-      'max_word_length': 6,
-      'minimal_actions': 'Ulysses/wait/pray/inventory/go down/...',
-      'grammar': 'again/g;answer/reply;back;barf/chomp/...',
-      'walkthrough': 'N/N/U/Get egg/D/S/E/Open window/...'
-    }
-
-    .. note:: Walkthroughs are defined for only a few games.
     """
     return defines.BINDINGS_DICT.get(md5hash, {})
 
@@ -365,6 +377,7 @@ class FrotzEnv():
     def __init__(self, story_file, seed=None):
         self._cache = {}
         self.frotz_lib = _load_frotz_lib()
+        self._bindings = None
         self.load(story_file, seed)
 
     def __del__(self):
@@ -399,12 +412,12 @@ class FrotzEnv():
                 warnings.warn(msg, UnsupportedGameWarning)
 
             md5hash = hashlib.md5(rom).hexdigest()
-            self.bindings = _load_bindings(md5hash)
+            self._bindings = _load_bindings(md5hash)
             self.act_gen = TemplateActionGenerator(self.bindings) if self.bindings else None
 
             self._cache[story_file] = (rom, self.bindings, self.act_gen)
 
-        rom, self.bindings, self.act_gen = self._cache[story_file]
+        rom, self._bindings, self.act_gen = self._cache[story_file]
 
         self.seed(seed)
         self.frotz_lib.setup(self.story_file, self._seed, rom, len(rom))
@@ -465,6 +478,41 @@ class FrotzEnv():
         ''' Cleans up the FrotzEnv, freeing any allocated memory. '''
         self.frotz_lib.shutdown()
 
+    @property
+    def bindings(self):
+        """
+        Gets information pertaining to the currently loaded game.
+        Returns a dictionary with the following keys:
+
+        - `name`: Name of the game. E.g. `zork1`
+        - `rom`: Name of the file used to load the game. E.g. `zork1.z5`
+        - `walkthrough`: A walkthrough for the game.
+        - `seed`: Seed necessary to replicate the walkthrough.
+        - `grammar`: List of action templates for the game.
+        - `max_word_length`: Maximum number of characters per word recognized by the parser.
+
+        :returns: Dictionary containing game-specific bindings if it exists.
+                  Otherwise, an empty dictionary.
+
+        :Example:
+
+        >>> import jericho
+        >>> env = jericho.FrotzEnv('zork1')
+        >>> env.bindings
+        {
+        'name': 'zork1',
+        'rom': 'zork1.z5',
+        'seed': 12,
+        'max_word_length': 6,
+        'minimal_actions': 'Ulysses/wait/pray/inventory/go down/...',
+        'grammar': 'again/g;answer/reply;back;barf/chomp/...',
+        'walkthrough': 'N/N/U/Get egg/D/S/E/Open window/...'
+        }
+
+        .. note:: Walkthroughs are defined for only a few games.
+        """
+        return self._bindings
+
     def get_dictionary(self):
         ''' Returns a list of :class:`jericho.DictionaryWord` words recognized\
         by the game's parser. See :doc:`dictionary`. '''
@@ -487,23 +535,28 @@ class FrotzEnv():
             return []
         return self.bindings['walkthrough'].split('/')
 
-    def get_valid_actions(self, use_object_tree=True):
+    def get_valid_actions(self, use_object_tree=True, use_ctypes=True, use_parallel=True):
         """
         Attempts to generate a set of unique valid actions from the current game state.
 
         :param use_object_tree: Query the :doc:`object_tree` for names of surrounding objects.
         :type use_object_tree: boolean
+        :param use_ctypes: Uses the optimized ctypes implementation of valid action filtering.
+        :type use_ctypes: boolean
+        :param use_parallel: Uses the parallized implementation of valid action filtering.
+        :type use_parallel: boolean
         :returns: A list of valid actions.
 
         """
         if not self.is_fully_supported or not self.act_gen:
             warnings.warn('Unable to find valid actions in an unsupported game.', UnsupportedGameWarning)
             return []
+
         interactive_objs  = self._identify_interactive_objects(use_object_tree=use_object_tree)
         best_obj_names    = self._score_object_names(interactive_objs)
         candidate_actions = self.act_gen.generate_actions(best_obj_names)
-        diff2acts         = self._filter_candidate_actions(candidate_actions)
-        valid_actions     = [max(v, key=utl.verb_usage_count) for v in diff2acts.values()]
+        diff2acts         = self._filter_candidate_actions(candidate_actions, use_ctypes, use_parallel)
+        valid_actions = [max(v, key=utl.verb_usage_count) for v in diff2acts.values()]
         return valid_actions
 
     def set_state(self, state):
@@ -522,13 +575,14 @@ class FrotzEnv():
         >>> env.set_state(state) # Whew, let's try something else
 
         '''
-        ram, stack, pc, sp, fp, frame_count, rng, narrative = state
+        ram, stack, pc, sp, fp, frame_count, opcode, rng, narrative = state
         self.frotz_lib.setRng(*rng)
         self.frotz_lib.setRAM(as_ctypes(ram))
         self.frotz_lib.setStack(as_ctypes(stack))
         self.frotz_lib.setPC(pc)
         self.frotz_lib.setSP(sp)
         self.frotz_lib.setFP(fp)
+        self.frotz_lib.set_opcode(opcode)
         self.frotz_lib.setFrameCount(frame_count)
         self.frotz_lib.set_narrative_text(narrative)
 
@@ -554,10 +608,11 @@ class FrotzEnv():
         pc = self.frotz_lib.getPC()
         sp = self.frotz_lib.getSP()
         fp = self.frotz_lib.getFP()
+        opcode = self.frotz_lib.get_opcode()
         frame_count = self.frotz_lib.getFrameCount()
         rng = self.frotz_lib.getRngA(), self.frotz_lib.getRngInterval(), self.frotz_lib.getRngCounter()
         narrative = self.frotz_lib.get_narrative_text()
-        state = ram, stack, pc, sp, fp, frame_count, rng, narrative
+        state = ram, stack, pc, sp, fp, frame_count, opcode, rng, narrative
         return state
 
     def get_max_score(self):
@@ -593,7 +648,7 @@ class FrotzEnv():
     def get_world_objects(self, clean=False):
         ''' Returns an array containing all the :class:`jericho.ZObject` in the game.
 
-        :param clean: If True, disconnects noisy objects like Zork1's theif from\
+        :param clean: If True, disconnects noisy objects like Zork1's thief from\
         the Object Tree. This is mainly useful if using world objects as an\
         indication of unique game state.
         :type clean: Boolean
@@ -864,7 +919,7 @@ class FrotzEnv():
         self.set_state(state)
         return desc2obj
 
-    def _filter_candidate_actions(self, candidate_actions):
+    def _filter_candidate_actions(self, candidate_actions, use_ctypes=False, use_parallel=False):
         """
         Given a list of candidate actions, returns a dictionary mapping world_diff
         to the list of candidate actions that cause this diff. Only actions that
@@ -872,33 +927,69 @@ class FrotzEnv():
 
         :param candidate_actions: Candidate actions to test for validity.
         :type candidate_actions: list
+        :param use_ctypes: Uses the optimized ctypes implementation of valid action filtering.
+        :type use_ctypes: boolean
+        :param use_parallel: Uses the parallized implementation of valid action filtering.
+        :type use_parallel: boolean
         :returns: Dictionary of world_diff to list of actions.
 
         """
         if self.game_over() or self.victory() or self._emulator_halted():
             return {}
-        diff2acts = {}
-        orig_score = self.get_score()
+
+        candidate_actions = [act.action if isinstance(act, defines.TemplateAction) else act for act in candidate_actions]
+
         state = self.get_state()
-        for act in candidate_actions:
-            self.set_state(state)
-            if isinstance(act, defines.TemplateAction):
-                obs, rew, done, info = self.step(act.action)
-            else:
-                obs, rew, done, info = self.step(act)
+        diff2acts = defaultdict(list)
+
+        if use_parallel:
+            state = self.get_state()
+            if not hasattr(self, 'pool'):
+                self.pool = mp.Pool(initializer=init_worker, initargs=(self.story_file.decode(), self._seed))
+
+            args = [(state, actions, use_ctypes) for actions in chunk(candidate_actions, n=self.pool._processes)]
+            list_diff2acts = self.pool.map(worker, args)
+            for d in list_diff2acts:
+                for k, v in d.items():
+                    diff2acts[k].extend(v)
+
+        elif use_ctypes:
+            candidate_str = (";".join(candidate_actions)).encode('utf-8')
+            valid_str = (' '*(len(candidate_str)+1)).encode('utf-8')
+
+            DIFF_SIZE = 128
+            diff_array = np.zeros(len(candidate_actions) * DIFF_SIZE, dtype=np.uint16)
+            valid_cnt = self.frotz_lib.filter_candidate_actions(
+                candidate_str,
+                valid_str,
+                as_ctypes(diff_array)
+            )
             if self._emulator_halted():
                 self.reset()
-                continue
-            if info['score'] != orig_score or done or self._world_changed():
-                # Heuristic to ignore actions with side-effect of taking items
-                if '(Taken)' in obs:
+
+            valid_acts = valid_str.decode('cp1252').strip().split(';')[:-1]
+            for i in range(valid_cnt):
+                diff = tuple(diff_array[i*DIFF_SIZE:(i+1)*DIFF_SIZE])
+                diff2acts[diff].append(valid_acts[i])
+
+        else:
+            orig_score = self.get_score()
+            for act in candidate_actions:
+                self.set_state(state)
+                obs, rew, done, info = self.step(act)
+
+                if self._emulator_halted():
+                    self.reset()
                     continue
-                diff = self._get_world_diff()
-                if diff in diff2acts:
-                    if act not in diff2acts[diff]:
-                        diff2acts[diff].append(act)
-                else:
-                    diff2acts[diff] = [act]
+
+                if info['score'] != orig_score or done or self._world_changed():
+                    # Heuristic to ignore actions with side-effect of taking items
+                    if '(Taken)' in obs:
+                        continue
+
+                    diff = self._get_world_diff()
+                    diff2acts[diff].append(act)
+
         self.set_state(state)
         return diff2acts
 
